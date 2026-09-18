@@ -12,6 +12,8 @@ from PIL import Image
 import re
 import subprocess
 
+import static_ffmpeg
+static_ffmpeg.add_paths()
 BOT_TOKEN = "6336327844:AAHtjTfWaFP8XiqxRfnCDoDiP2YfCUTGSKc"
 bot = telebot.TeleBot(BOT_TOKEN)
 
