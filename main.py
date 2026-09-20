@@ -12,8 +12,11 @@ from PIL import Image
 import re
 import subprocess
 
+os.system('pip install -U yt-dlp --quiet')
+
 import static_ffmpeg
 static_ffmpeg.add_paths()
+
 BOT_TOKEN = "6336327844:AAHtjTfWaFP8XiqxRfnCDoDiP2YfCUTGSKc"
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -29,15 +32,18 @@ for directory in [TEMP_DIR, "downloads", "user_images", "cookies"]:
 post_queue = queue.Queue()
 pending_photos = {}
 
+
 def load_user_data():
     if os.path.exists(USER_DATA_FILE):
         with open(USER_DATA_FILE, 'r') as f:
             return json.load(f)
     return {}
 
+
 def save_user_data(data):
     with open(USER_DATA_FILE, 'w') as f:
         json.dump(data, f, indent=4)
+
 
 def load_user_settings():
     if os.path.exists(USER_SETTINGS_FILE):
@@ -45,35 +51,36 @@ def load_user_settings():
             return json.load(f)
     return {}
 
+
 def save_user_settings(settings):
     with open(USER_SETTINGS_FILE, 'w') as f:
         json.dump(settings, f, indent=4)
 
+
 def get_user_session(user_id):
-    """يجلب الـ sessionid المحفوظ من أمر /se"""
     user_data = load_user_data()
     user_id_str = str(user_id)
     if user_id_str in user_data and user_data[user_id_str].get("sessionid"):
         return user_data[user_id_str]["sessionid"]
     return None
 
+
 def get_user_cookies(user_id):
-    """يبني كوكيز للنشر على إنستغرام من sessionid"""
     session_id = get_user_session(user_id)
     if session_id:
         return f"sessionid={session_id};"
     return ""
 
+
 def get_user_caption(user_id):
-    """يجلب نص التوقيع المحفوظ من أمر /caption"""
     settings = load_user_settings()
     user_id_str = str(user_id)
     if user_id_str in settings and "caption" in settings[user_id_str]:
         return settings[user_id_str]["caption"]
     return ""
 
+
 def get_user_image(user_id):
-    """يجلب الصورة المصغرة المحفوظة"""
     settings = load_user_settings()
     user_id_str = str(user_id)
     if user_id_str in settings and "image_path" in settings[user_id_str]:
@@ -83,8 +90,8 @@ def get_user_image(user_id):
                 return f.read()
     return None
 
+
 def create_netscape_cookie_file(user_id):
-    """يبني ملف كوكيز بصيغة Netscape من الـ sessionid المحفوظ"""
     session_id = get_user_session(user_id)
     if not session_id:
         return None
@@ -110,6 +117,7 @@ def create_netscape_cookie_file(user_id):
         print(f"❌ خطأ في إنشاء ملف الكوكيز: {e}")
         return None
 
+
 def download_media(url, user_id):
     try:
         temp_dir = os.path.join(TEMP_DIR, str(user_id))
@@ -119,7 +127,8 @@ def download_media(url, user_id):
         cookie_file = create_netscape_cookie_file(user_id)
 
         ydl_opts = {
-            'format': 'best[ext=mp4]/best[height<=1080]/best',
+            # ✅ 'b' = best single stream (نسخة تيك توك بدون علامة مائية)
+            'format': 'b[ext=mp4]/b',
             'outtmpl': os.path.join(temp_dir, 'media_%(id)s.%(ext)s'),
             'quiet': False,
             'no_warnings': False,
@@ -132,6 +141,12 @@ def download_media(url, user_id):
             'fragment_retries': 3,
             'socket_timeout': 30,
             'merge_output_format': 'mp4',
+            # ✅ إجبار تيك توك على استخدام API الموبايل (نتائج أنظف وأحدث)
+            'extractor_args': {
+                'tiktok': {
+                    'app_info': '7355728856979392262',
+                }
+            },
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
@@ -165,6 +180,7 @@ def download_media(url, user_id):
         print(f"❌ Download error: {type(e).__name__}: {e}")
         return None
 
+
 def convert_image_to_video(image_path, duration=10):
     try:
         output_path = os.path.join(TEMP_DIR, f"reel_{int(time.time())}.mp4")
@@ -191,6 +207,7 @@ def convert_image_to_video(image_path, duration=10):
         print(f"Image conversion error: {e}")
         return None
 
+
 def get_video_duration(file_path):
     try:
         cmd = [
@@ -204,6 +221,40 @@ def get_video_duration(file_path):
     except:
         return 10.0
 
+
+def extract_middle_frame(video_path, user_id):
+    """يستخرج إطاراً من منتصف الفيديو ويحفظه كصورة مصغرة"""
+    try:
+        duration = get_video_duration(video_path)
+        middle = duration / 2.0
+
+        user_dir = f"user_images/{user_id}"
+        if not os.path.exists(user_dir):
+            os.makedirs(user_dir)
+
+        output_path = os.path.join(user_dir, f"thumb_{int(time.time())}.jpg")
+
+        cmd = [
+            'ffmpeg', '-y',
+            '-ss', str(middle),
+            '-i', video_path,
+            '-frames:v', '1',
+            '-q:v', '2',
+            output_path
+        ]
+        subprocess.run(cmd, capture_output=True, text=True)
+
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            img = Image.open(output_path)
+            img = img.resize((1080, 1920))
+            img.save(output_path, "JPEG", quality=85)
+            return output_path
+        return None
+    except Exception as e:
+        print(f"Frame extract error: {e}")
+        return None
+
+
 def trim_last_seconds(file_path, seconds_to_cut=2):
     try:
         if not os.path.exists(file_path):
@@ -211,7 +262,7 @@ def trim_last_seconds(file_path, seconds_to_cut=2):
 
         total_duration = get_video_duration(file_path)
         if total_duration <= seconds_to_cut + 0.5:
-            print("الفيديو قصير جدًا، لن يتم القص")
+            print("الفيديو قصير جداً، لن يتم القص")
             return file_path
 
         new_duration = total_duration - seconds_to_cut
@@ -251,6 +302,7 @@ def trim_last_seconds(file_path, seconds_to_cut=2):
     except Exception as e:
         print(f"Trim error: {e}")
         return None
+
 
 def post_to_instagram(video_data, caption, user_id, duration_ms):
     try:
@@ -337,6 +389,7 @@ def post_to_instagram(video_data, caption, user_id, duration_ms):
     except Exception as e:
         return False, str(e)
 
+
 def process_queue():
     while True:
         task = post_queue.get()
@@ -367,7 +420,9 @@ def process_queue():
 
         post_queue.task_done()
 
+
 threading.Thread(target=process_queue, daemon=True).start()
+
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -376,10 +431,11 @@ def send_welcome(message):
 الأوامر:
 /se [كود_الجلسة] - تعيين جلسة انستغرام
 /caption [النص] - تعيين نص التوقيع
-/photo - رفع صورة مصغرة
+/photo - اختيار نوع الصورة المصغرة
 /links - عرض الروابط المخزنة
 /session - عرض جلستك
 /show_caption - عرض توقيعك""")
+
 
 @bot.message_handler(commands=['se'])
 def set_session(message):
@@ -402,10 +458,43 @@ def set_session(message):
 
     bot.reply_to(message, "✅ تم حفظ الجلسة وإنشاء ملف الكوكيز تلقائياً")
 
+
 @bot.message_handler(commands=['photo'])
 def set_photo(message):
-    bot.reply_to(message, "أرسل الصورة المصغرة")
-    pending_photos[str(message.from_user.id)] = True
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.add(
+        telebot.types.InlineKeyboardButton("📷 صورة ثابتة", callback_data="photo_static"),
+        telebot.types.InlineKeyboardButton("🎬 من منتصف الفيديو", callback_data="photo_from_video")
+    )
+    bot.reply_to(message, "اختر نوع الصورة المصغرة:", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data in ["photo_static", "photo_from_video"])
+def handle_photo_choice(call):
+    user_id = str(call.from_user.id)
+    settings = load_user_settings()
+    if user_id not in settings:
+        settings[user_id] = {}
+
+    if call.data == "photo_static":
+        settings[user_id]["photo_mode"] = "static"
+        save_user_settings(settings)
+        pending_photos[user_id] = True
+        bot.edit_message_text(
+            "📷 أرسل الصورة الثابتة الآن.",
+            call.message.chat.id,
+            call.message.message_id
+        )
+    else:
+        settings[user_id]["photo_mode"] = "from_video"
+        settings[user_id].pop("image_path", None)
+        save_user_settings(settings)
+        bot.edit_message_text(
+            "🎬 تمام، راح آخذ الصورة المصغرة من منتصف كل فيديو ترسله.",
+            call.message.chat.id,
+            call.message.message_id
+        )
+
 
 @bot.message_handler(commands=['caption'])
 def set_caption(message):
@@ -423,6 +512,7 @@ def set_caption(message):
     save_user_settings(settings)
     bot.reply_to(message, "تم حفظ التوقيع")
 
+
 @bot.message_handler(commands=['links'])
 def show_links(message):
     try:
@@ -438,6 +528,7 @@ def show_links(message):
     except:
         bot.reply_to(message, "خطأ في قراءة الروابط")
 
+
 @bot.message_handler(commands=['session'])
 def show_session(message):
     session = get_user_session(message.from_user.id)
@@ -446,6 +537,7 @@ def show_session(message):
     else:
         bot.reply_to(message, "لا توجد جلسة")
 
+
 @bot.message_handler(commands=['show_caption'])
 def show_caption(message):
     caption = get_user_caption(message.from_user.id)
@@ -453,6 +545,7 @@ def show_caption(message):
         bot.reply_to(message, f"التوقيع: {caption}")
     else:
         bot.reply_to(message, "لا يوجد توقيع")
+
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
@@ -483,13 +576,15 @@ def handle_photo(message):
         if user_id not in settings:
             settings[user_id] = {}
         settings[user_id]["image_path"] = file_path
+        settings[user_id]["photo_mode"] = "static"
         save_user_settings(settings)
 
         pending_photos.pop(user_id, None)
-        bot.reply_to(message, "تم حفظ الصورة المصغرة")
+        bot.reply_to(message, "✅ تم حفظ الصورة المصغرة الثابتة")
 
     except Exception as e:
         bot.reply_to(message, f"خطأ: {str(e)}")
+
 
 @bot.message_handler(func=lambda m: m.text and re.search(r'https?://[^\s]+', m.text) and not m.text.startswith('/'))
 def handle_url(message):
@@ -507,8 +602,17 @@ def handle_url(message):
         return
 
     settings = load_user_settings()
-    if str(user_id) not in settings or "image_path" not in settings[str(user_id)]:
-        bot.reply_to(message, "أولاً: /photo لرفع الصورة المصغرة")
+    user_settings = settings.get(str(user_id), {})
+    photo_mode = user_settings.get("photo_mode", None)
+
+    if photo_mode == "static":
+        if "image_path" not in user_settings:
+            bot.reply_to(message, "أولاً: /photo لرفع الصورة الثابتة")
+            return
+    elif photo_mode == "from_video":
+        pass
+    else:
+        bot.reply_to(message, "أولاً: /photo لاختيار نوع الصورة المصغرة")
         return
 
     bot.reply_to(message, "جاري التحميل...")
@@ -534,6 +638,20 @@ def handle_url(message):
     else:
         bot.reply_to(message, "تعذّر قص الفيديو، سيتم النشر بدون قص")
 
+    # استخراج الصورة المصغرة من الفيديو إذا كان الوضع from_video
+    if photo_mode == "from_video":
+        thumb_path = extract_middle_frame(media_path, user_id)
+        if thumb_path:
+            settings = load_user_settings()
+            user_id_str = str(user_id)
+            if user_id_str not in settings:
+                settings[user_id_str] = {}
+            settings[user_id_str]["image_path"] = thumb_path
+            save_user_settings(settings)
+            bot.reply_to(message, "🎬 تم استخراج الصورة المصغرة من منتصف الفيديو")
+        else:
+            bot.reply_to(message, "⚠️ تعذّر استخراج الصورة من الفيديو، سيتم النشر بدونها")
+
     caption = get_user_caption(user_id)
 
     post_queue.put({
@@ -543,6 +661,7 @@ def handle_url(message):
     })
 
     bot.reply_to(message, "تمت الإضافة لقائمة الانتظار ✅")
+
 
 if __name__ == "__main__":
     print("البوت يعمل...")
